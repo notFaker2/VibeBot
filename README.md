@@ -1,4 +1,4 @@
-# YouTube Downloader Telegram Bot
+# VibeBot
 
 A legitimate Telegram bot using the official Bot API.
 
