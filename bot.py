@@ -237,5 +237,10 @@ def main():
     app.run_polling()
 
 if __name__ == '__main__':
-    main()
+    import asyncio
+    async def main():
+        await app.bot.delete_webhook(drop_pending_updates=True)
+        await app.run_polling()
+
+    asyncio.run(main())
 
