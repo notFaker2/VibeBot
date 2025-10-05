@@ -139,9 +139,19 @@ async def download_and_send_video(context: ContextTypes.DEFAULT_TYPE, chat_id: i
         await context.bot.send_video(chat_id=chat_id, video=open(video_path, 'rb'), supports_streaming=True, caption=info.get('title', 'YouTube Video'))
         await context.bot.delete_message(chat_id=chat_id, message_id=status_msg.message_id)
         return True
+    except yt_dlp.utils.DownloadError as e:
+        # Catch the specific error for login-required videos
+        error_string = str(e)
+        if "Sign in to confirm" in error_string or "age-restricted" in error_string:
+            error_message = "❌ **Download Failed:**\nThis video is age-restricted or requires a login to view. Unfortunately, I can't download it."
+            await context.bot.edit_message_text(text=error_message, chat_id=chat_id, message_id=status_msg.message_id, parse_mode='Markdown')
+        else:
+            logger.error(f"A download error occurred: {e}", exc_info=True)
+            await context.bot.edit_message_text(text=f"Sorry, an unknown download error occurred. 😔", chat_id=chat_id, message_id=status_msg.message_id)
+        return False
     except Exception as e:
-        logger.error(f"Error downloading video: {e}", exc_info=True)
-        await context.bot.edit_message_text(text=f"Sorry, an error occurred while processing the video. 😔", chat_id=chat_id, message_id=status_msg.message_id)
+        logger.error(f"An unexpected error occurred in video processing: {e}", exc_info=True)
+        await context.bot.edit_message_text(text=f"Sorry, a critical error occurred while processing the video. 😔", chat_id=chat_id, message_id=status_msg.message_id)
         return False
     finally:
         if video_path and os.path.exists(video_path):
@@ -175,9 +185,19 @@ async def download_and_send_audio(context: ContextTypes.DEFAULT_TYPE, chat_id: i
         await context.bot.send_audio(chat_id=chat_id, audio=open(audio_path, 'rb'), title=info.get('title', 'YouTube Audio'), performer=info.get('uploader', 'Uploader'))
         await context.bot.delete_message(chat_id=chat_id, message_id=status_msg.message_id)
         return True
+    except yt_dlp.utils.DownloadError as e:
+        # Catch the specific error for login-required videos
+        error_string = str(e)
+        if "Sign in to confirm" in error_string or "age-restricted" in error_string:
+            error_message = "❌ **Download Failed:**\nThis video's audio is age-restricted or requires a login to view. Unfortunately, I can't download it."
+            await context.bot.edit_message_text(text=error_message, chat_id=chat_id, message_id=status_msg.message_id, parse_mode='Markdown')
+        else:
+            logger.error(f"A download error occurred: {e}", exc_info=True)
+            await context.bot.edit_message_text(text=f"Sorry, an unknown download error occurred. 😔", chat_id=chat_id, message_id=status_msg.message_id)
+        return False
     except Exception as e:
-        logger.error(f"Error downloading audio: {e}", exc_info=True)
-        await context.bot.edit_message_text(text=f"Sorry, an error occurred while processing the audio. 😔", chat_id=chat_id, message_id=status_msg.message_id)
+        logger.error(f"An unexpected error occurred in audio processing: {e}", exc_info=True)
+        await context.bot.edit_message_text(text=f"Sorry, a critical error occurred while processing the audio. 😔", chat_id=chat_id, message_id=status_msg.message_id)
         return False
     finally:
         if audio_path and os.path.exists(audio_path):
@@ -205,4 +225,5 @@ def main():
 
 if __name__ == '__main__':
     main()
+
 
