@@ -310,19 +310,14 @@ def main():
         logger.error("TELEGRAM_BOT_TOKEN not set")
         return
 
-    logger.info(f"Starting bot on Render (Port: {PORT})...")
-    
+    logger.info("Starting bot on Northflank...")
+
     app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_handler(CallbackQueryHandler(button_handler))
-
-    logger.info("Bot is running with polling...")
-    
-    # For Render - just use polling, no webhook setup needed
-    app.run_polling()
 
 if __name__ == '__main__':
     main()
