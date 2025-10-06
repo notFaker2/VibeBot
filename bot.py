@@ -120,35 +120,98 @@ async def download_and_send_media(context: ContextTypes.DEFAULT_TYPE, chat_id: i
     try:
         status_msg = await context.bot.send_message(chat_id=chat_id, text=f"Preparing {media_type}...")
         
+        # Enhanced yt-dlp options to bypass restrictions
         ydl_opts = {
             'format': 'best[height<=480][ext=mp4]/best[ext=mp4]/best' if media_type == 'video' else 'bestaudio[ext=m4a]/bestaudio',
             'outtmpl': os.path.join(DOWNLOAD_DIR, f'%(id)s_{media_type}.%(ext)s'),
             'quiet': True,
+            
+            # Anti-bot bypass options
             'no_warnings': False,
             'ignoreerrors': True,
-            'retries': 3,
-            'fragment_retries': 3,
+            'retries': 5,
+            'fragment_retries': 5,
+            'skip_unavailable_fragments': True,
             'extract_flat': False,
+            
+            # Bypass geographic restrictions
+            'geo_bypass': True,
+            'geo_bypass_country': 'US',
+            'geo_bypass_ip_block': None,
+            
+            # Use mobile user agents and clients
             'http_headers': {
-                'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36',
+                'User-Agent': 'Mozilla/5.0 (Linux; Android 10; SM-G975F) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.114 Mobile Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+                'Accept-Language': 'en-US,en;q=0.5',
+                'Accept-Encoding': 'gzip, deflate, br',
+                'DNT': '1',
+                'Connection': 'keep-alive',
+                'Upgrade-Insecure-Requests': '1',
             },
+            
+            # YouTube specific extractor options
+            'extractor_args': {
+                'youtube': {
+                    'player_client': ['android', 'ios', 'web'],
+                    'player_skip': ['configs', 'webpage', 'js'],
+                    'skip': ['dash', 'hls'],
+                }
+            },
+            
+            # Throttle to avoid detection
+            'ratelimit': 5000000,  # 5 MB/s
+            'throttled_rate': 1000000,  # 1 MB/s when throttled
+            
+            # Alternative extractors
+            'allowed_extractors': ['youtube', 'youtube:tab'],
+            'extractor_retries': 3,
+            
+            # Force IPv4 (sometimes helps)
+            'source_address': '0.0.0.0',
+            
+            # Don't write info json (reduce IO)
+            'writeinfojson': False,
+            'writethumbnail': False,
+            'writesubtitles': False,
+            'writeautomaticsub': False,
         }
-        
-        # Add cookies if available
-        if os.path.exists('cookies.txt'):
-            ydl_opts['cookiefile'] = 'cookies.txt'
         
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             # Try to get info first
             try:
                 info = ydl.extract_info(url, download=False)
+                
+                # If we can't get info, try with different approaches
+                if not info:
+                    raise Exception("Could not extract video info")
+                    
             except Exception as e:
-                await context.bot.edit_message_text(
-                    text=f"❌ Cannot access this video. It might be private or restricted.",
-                    chat_id=chat_id, 
-                    message_id=status_msg.message_id
-                )
-                return False
+                logger.warning(f"First attempt failed: {e}. Trying alternative approach...")
+                
+                # Try alternative options
+                alt_ydl_opts = ydl_opts.copy()
+                alt_ydl_opts.update({
+                    'format': 'worst[ext=mp4]/worst' if media_type == 'video' else 'worstaudio/worst',
+                    'extractor_args': {
+                        'youtube': {
+                            'player_client': ['android'],
+                            'player_skip': ['all'],
+                        }
+                    },
+                })
+                
+                try:
+                    with yt_dlp.YoutubeDL(alt_ydl_opts) as alt_ydl:
+                        info = alt_ydl.extract_info(url, download=False)
+                except Exception as alt_e:
+                    await context.bot.edit_message_text(
+                        text="❌ Cannot download this video. It might be private, age-restricted, or unavailable in this region.",
+                        chat_id=chat_id, 
+                        message_id=status_msg.message_id
+                    )
+                    logger.error(f"All download attempts failed: {alt_e}")
+                    return False
             
             # Check file size
             filesize = info.get('filesize') or info.get('filesize_approx')
@@ -168,12 +231,23 @@ async def download_and_send_media(context: ContextTypes.DEFAULT_TYPE, chat_id: i
                 message_id=status_msg.message_id
             )
             
-            ydl.download([url])
-            file_path = ydl.prepare_filename(info)
+            try:
+                ydl.download([url])
+                file_path = ydl.prepare_filename(info)
+            except Exception as download_error:
+                logger.warning(f"Download failed: {download_error}. Trying fallback format...")
+                
+                # Fallback to worst quality
+                fallback_ydl_opts = ydl_opts.copy()
+                fallback_ydl_opts['format'] = 'worst[ext=mp4]/worst' if media_type == 'video' else 'worstaudio/worst'
+                
+                with yt_dlp.YoutubeDL(fallback_ydl_opts) as fallback_ydl:
+                    fallback_ydl.download([url])
+                    file_path = fallback_ydl.prepare_filename(info)
 
         if not os.path.exists(file_path):
             await context.bot.edit_message_text(
-                text=f"❌ Download failed - file not found.",
+                text=f"❌ Download failed. The video format might not be supported.",
                 chat_id=chat_id, 
                 message_id=status_msg.message_id
             )
@@ -217,7 +291,7 @@ async def download_and_send_media(context: ContextTypes.DEFAULT_TYPE, chat_id: i
         
     except Exception as e:
         logger.error(f"Error processing {media_type}: {e}", exc_info=True)
-        error_msg = f"❌ Error processing {media_type}."
+        error_msg = f"❌ Error: {str(e)[:100]}..."
         if status_msg:
             await context.bot.edit_message_text(text=error_msg, chat_id=chat_id, message_id=status_msg.message_id)
         else:
