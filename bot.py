@@ -12,13 +12,13 @@ from telegram.ext import (
 import yt_dlp
 from dotenv import load_dotenv
 
-# Load environment variables from a .env file
+# Load environment variables
 load_dotenv()
 
 # --- Configuration ---
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 DOWNLOAD_DIR = "downloads"
-MAX_FILE_SIZE_BYTES = 50 * 1024 * 1024  # 50 MB Telegram limit
+MAX_FILE_SIZE = 50 * 1024 * 1024  # 50MB Telegram limit
 
 # --- Setup ---
 logging.basicConfig(
@@ -38,7 +38,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_name = update.effective_user.first_name
     welcome_message = (
         f"Hi {user_name}! 👋\n\n"
-        "I'm your 24/7 YouTube Downloader Bot!\n\n"
+        "I'm your YouTube Downloader Bot running on Render! 🚀\n\n"
         "Just send me a YouTube link, and I'll help you download the video or audio. "
         "Files must be under 50MB to be uploaded to Telegram."
     )
@@ -55,13 +55,14 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🎬 Video only\n"
         "🎵 Audio only\n"
         "🎬+🎵 Both video and audio\n\n"
-        "⚠️ Please note: Telegram bots have a file size limit of 50 MB. I will let you know if the requested file is too large."
+        "⚠️ Please note: Telegram bots have a file size limit of 50 MB. "
+        "I will let you know if the requested file is too large."
     )
     await update.message.reply_text(help_text)
 
 def is_valid_youtube_url(url: str) -> bool:
     """Checks if the provided text is a valid YouTube URL."""
-    youtube_domains = ['youtube.com', 'youtu.be']
+    youtube_domains = ['youtube.com', 'youtu.be', 'www.youtube.com', 'm.youtube.com']
     return any(domain in url for domain in youtube_domains)
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -127,78 +128,79 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await context.bot.send_message(chat_id=chat_id, text="Both downloads failed. Please try again.")
 
+def get_file_size(file_path: str) -> int:
+    """Get file size in bytes."""
+    return os.path.getsize(file_path)
 
 async def download_and_send_video(context: ContextTypes.DEFAULT_TYPE, chat_id: int, url: str) -> bool:
-    """Checks video size, then downloads, sends, and cleans up the video file."""
+    """Downloads, sends, and cleans up a video file."""
     video_path = None
     status_msg = None
     try:
-        status_msg = await context.bot.send_message(chat_id=chat_id, text="Checking video details...")
+        status_msg = await context.bot.send_message(chat_id=chat_id, text="Checking video... 📹")
         
         ydl_opts = {
-            'format': 'best[height<=480][ext=mp4]',  # Lower quality to stay under 50MB
+            'format': 'best[height<=720][ext=mp4]',  # Limit to 720p for size
             'outtmpl': os.path.join(DOWNLOAD_DIR, '%(id)s.%(ext)s'),
             'quiet': True,
         }
         
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            # First check file size
             info = ydl.extract_info(url, download=False)
             filesize = info.get('filesize') or info.get('filesize_approx')
             
-            if filesize and filesize > MAX_FILE_SIZE_BYTES:
+            if filesize and filesize > MAX_FILE_SIZE:
                 size_mb = filesize / 1024 / 1024
                 await context.bot.edit_message_text(
-                    text=f"❌ The video is too large ({size_mb:.1f} MB). Telegram limit is 50 MB.",
-                    chat_id=chat_id, message_id=status_msg.message_id
+                    text=f"❌ Video too large ({size_mb:.1f} MB). Max 50 MB.",
+                    chat_id=chat_id, 
+                    message_id=status_msg.message_id
                 )
                 return False
 
             await context.bot.edit_message_text(text="Downloading video... 🎬", chat_id=chat_id, message_id=status_msg.message_id)
             ydl.download([url])
             video_path = ydl.prepare_filename(info)
-        
-        # Check actual file size after download
-        if os.path.exists(video_path):
-            actual_size = os.path.getsize(video_path)
-            if actual_size > MAX_FILE_SIZE_BYTES:
-                await context.bot.edit_message_text(
-                    text=f"❌ Downloaded video is too large ({actual_size/1024/1024:.1f} MB).",
-                    chat_id=chat_id, message_id=status_msg.message_id
-                )
-                return False
-        
+
+        # Check actual file size
+        actual_size = get_file_size(video_path)
+        if actual_size > MAX_FILE_SIZE:
+            await context.bot.edit_message_text(
+                text=f"❌ Downloaded video too large ({actual_size/1024/1024:.1f} MB).",
+                chat_id=chat_id, 
+                message_id=status_msg.message_id
+            )
+            return False
+
         await context.bot.edit_message_text(text="Uploading video... 🚀", chat_id=chat_id, message_id=status_msg.message_id)
+        
         with open(video_path, 'rb') as video_file:
             await context.bot.send_video(
                 chat_id=chat_id, 
                 video=video_file, 
                 supports_streaming=True, 
-                caption=info.get('title', 'YouTube Video')[:1000]  # Limit caption length
+                caption=info.get('title', 'YouTube Video')[:1000]
             )
         
         await context.bot.delete_message(chat_id=chat_id, message_id=status_msg.message_id)
         return True
 
     except yt_dlp.utils.DownloadError as e:
-        error_string = str(e)
-        if "Sign in to confirm" in error_string or "age-restricted" in error_string:
-            error_message = "❌ This video is age-restricted or requires login. I can't download it."
-        else:
-            error_message = "❌ Download failed. The video might be private or unavailable."
-        
+        error_msg = "❌ Download failed. Video might be private, restricted, or unavailable."
         if status_msg:
-            await context.bot.edit_message_text(text=error_message, chat_id=chat_id, message_id=status_msg.message_id)
+            await context.bot.edit_message_text(text=error_msg, chat_id=chat_id, message_id=status_msg.message_id)
         else:
-            await context.bot.send_message(chat_id=chat_id, text=error_message)
+            await context.bot.send_message(chat_id=chat_id, text=error_msg)
         return False
         
     except Exception as e:
-        logger.error(f"Error in video processing: {e}", exc_info=True)
-        error_message = "❌ An unexpected error occurred while processing the video."
+        logger.error(f"Error processing video: {e}", exc_info=True)
+        error_msg = "❌ An error occurred while processing the video."
         if status_msg:
-            await context.bot.edit_message_text(text=error_message, chat_id=chat_id, message_id=status_msg.message_id)
+            await context.bot.edit_message_text(text=error_msg, chat_id=chat_id, message_id=status_msg.message_id)
         else:
-            await context.bot.send_message(chat_id=chat_id, text=error_message)
+            await context.bot.send_message(chat_id=chat_id, text=error_msg)
         return False
         
     finally:
@@ -210,11 +212,11 @@ async def download_and_send_video(context: ContextTypes.DEFAULT_TYPE, chat_id: i
                 logger.error(f"Error cleaning up video file: {e}")
 
 async def download_and_send_audio(context: ContextTypes.DEFAULT_TYPE, chat_id: int, url: str) -> bool:
-    """Checks audio size, then downloads, sends, and cleans up the audio file."""
+    """Downloads, sends, and cleans up an audio file."""
     audio_path = None
     status_msg = None
     try:
-        status_msg = await context.bot.send_message(chat_id=chat_id, text="Checking audio details...")
+        status_msg = await context.bot.send_message(chat_id=chat_id, text="Checking audio... 🎵")
         
         ydl_opts = {
             'format': 'bestaudio[ext=m4a]/bestaudio',
@@ -223,63 +225,61 @@ async def download_and_send_audio(context: ContextTypes.DEFAULT_TYPE, chat_id: i
         }
         
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            # First check file size
             info = ydl.extract_info(url, download=False)
             filesize = info.get('filesize') or info.get('filesize_approx')
-
-            if filesize and filesize > MAX_FILE_SIZE_BYTES:
+            
+            if filesize and filesize > MAX_FILE_SIZE:
                 size_mb = filesize / 1024 / 1024
                 await context.bot.edit_message_text(
-                    text=f"❌ The audio is too large ({size_mb:.1f} MB). Telegram limit is 50 MB.",
-                    chat_id=chat_id, message_id=status_msg.message_id
+                    text=f"❌ Audio too large ({size_mb:.1f} MB). Max 50 MB.",
+                    chat_id=chat_id, 
+                    message_id=status_msg.message_id
                 )
                 return False
-        
+
             await context.bot.edit_message_text(text="Downloading audio... 🎵", chat_id=chat_id, message_id=status_msg.message_id)
             ydl.download([url])
             audio_path = ydl.prepare_filename(info)
 
-        # Check actual file size after download
-        if os.path.exists(audio_path):
-            actual_size = os.path.getsize(audio_path)
-            if actual_size > MAX_FILE_SIZE_BYTES:
-                await context.bot.edit_message_text(
-                    text=f"❌ Downloaded audio is too large ({actual_size/1024/1024:.1f} MB).",
-                    chat_id=chat_id, message_id=status_msg.message_id
-                )
-                return False
+        # Check actual file size
+        actual_size = get_file_size(audio_path)
+        if actual_size > MAX_FILE_SIZE:
+            await context.bot.edit_message_text(
+                text=f"❌ Downloaded audio too large ({actual_size/1024/1024:.1f} MB).",
+                chat_id=chat_id, 
+                message_id=status_msg.message_id
+            )
+            return False
 
         await context.bot.edit_message_text(text="Uploading audio... 🚀", chat_id=chat_id, message_id=status_msg.message_id)
+        
         with open(audio_path, 'rb') as audio_file:
             await context.bot.send_audio(
                 chat_id=chat_id, 
                 audio=audio_file, 
-                title=info.get('title', 'YouTube Audio')[:64],  # Limit title length
-                performer=info.get('uploader', 'Uploader')[:64]  # Limit performer length
+                title=info.get('title', 'YouTube Audio')[:64],
+                performer=info.get('uploader', 'Uploader')[:64]
             )
         
         await context.bot.delete_message(chat_id=chat_id, message_id=status_msg.message_id)
         return True
         
     except yt_dlp.utils.DownloadError as e:
-        error_string = str(e)
-        if "Sign in to confirm" in error_string or "age-restricted" in error_string:
-            error_message = "❌ This audio is from an age-restricted or private video."
-        else:
-            error_message = "❌ Download failed. The video might be private or unavailable."
-        
+        error_msg = "❌ Download failed. Audio might be from a private or restricted video."
         if status_msg:
-            await context.bot.edit_message_text(text=error_message, chat_id=chat_id, message_id=status_msg.message_id)
+            await context.bot.edit_message_text(text=error_msg, chat_id=chat_id, message_id=status_msg.message_id)
         else:
-            await context.bot.send_message(chat_id=chat_id, text=error_message)
+            await context.bot.send_message(chat_id=chat_id, text=error_msg)
         return False
         
     except Exception as e:
-        logger.error(f"Error in audio processing: {e}", exc_info=True)
-        error_message = "❌ An unexpected error occurred while processing the audio."
+        logger.error(f"Error processing audio: {e}", exc_info=True)
+        error_msg = "❌ An error occurred while processing the audio."
         if status_msg:
-            await context.bot.edit_message_text(text=error_message, chat_id=chat_id, message_id=status_msg.message_id)
+            await context.bot.edit_message_text(text=error_msg, chat_id=chat_id, message_id=status_msg.message_id)
         else:
-            await context.bot.send_message(chat_id=chat_id, text=error_message)
+            await context.bot.send_message(chat_id=chat_id, text=error_msg)
         return False
         
     finally:
@@ -293,10 +293,10 @@ async def download_and_send_audio(context: ContextTypes.DEFAULT_TYPE, chat_id: i
 def main():
     """Starts the bot."""
     if not TELEGRAM_BOT_TOKEN:
-        logger.critical("FATAL ERROR: TELEGRAM_BOT_TOKEN is not defined. Please set it in your .env file or environment variables.")
+        logger.error("TELEGRAM_BOT_TOKEN not set. Please set it in environment variables.")
         return
 
-    logger.info("Starting bot...")
+    logger.info("Starting Telegram Bot on Render...")
     
     # Create the Application
     app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
@@ -307,9 +307,7 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_handler(CallbackQueryHandler(button_handler))
 
-    logger.info("Bot is now polling for updates...")
-    
-    # Start the bot
+    logger.info("Bot is now running with polling...")
     app.run_polling()
 
 if __name__ == '__main__':
