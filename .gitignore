@@ -1,0 +1,12 @@
+# Ignore environment files
+.env
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Downloads folder (optional for your bot)
+downloads/
+
+# Virtual environment
+venv/
